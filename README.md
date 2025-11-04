@@ -673,6 +673,885 @@ chrome.identity.provider.register({
 });
 ```
 
+## Advanced Cryptographic Primitives
+
+The Browser-as-IdP model enables powerful privacy-preserving primitives beyond basic identity assertion. These advanced features allow browsers to issue credentials that prove properties without revealing identity.
+
+### Anonymous Rate-Limited Tokens
+
+Rate-limited tokens enable browsers to prove "I'm a unique legitimate user" without revealing identity, preventing abuse while preserving privacy.
+
+#### Use Cases
+
+- **Anti-spam**: Prove you're not a bot without revealing who you are
+- **Rate limiting**: Enforce quotas per user without tracking identity
+- **Fair resource allocation**: Prevent hoarding while maintaining anonymity
+- **Voting systems**: One vote per person, fully anonymous
+- **Anonymous ticketing**: Prove you have a valid ticket without showing ID
+
+#### Implementation
+
+```javascript
+// Browser issues anonymous rate-limited token
+const rateLimitedToken = await navigator.identity.provider.issueAnonymousToken({
+  type: "rate-limited",
+  scope: "https://api.example.com/submit",
+  limit: {
+    count: 10,           // 10 requests
+    window: 86400000,    // per day
+    strategy: "sliding"  // sliding window
+  },
+  // Zero-knowledge proof of uniqueness without revealing identity
+  zkProof: {
+    type: "groth16",
+    circuit: "unique-user",
+    publicInputs: ["scope", "timestamp"]
+  }
+});
+
+// RP requests anonymous token for rate limiting
+const credential = await navigator.credentials.get({
+  identity: {
+    mode: "browser-idp",
+    tokenType: "anonymous-rate-limited",
+    scope: "https://api.example.com/submit",
+    rateLimits: {
+      maxRequests: 10,
+      window: "24h"
+    }
+  }
+});
+
+// Submit request with anonymous token
+await fetch("https://api.example.com/submit", {
+  method: "POST",
+  headers: {
+    "Authorization": `AnonymousToken ${credential.token}`
+  },
+  body: formData
+});
+```
+
+#### Token Structure
+
+```javascript
+{
+  // Anonymous token (no identity revealed)
+  "typ": "anonymous+rate-limited",
+  "alg": "BLS12-381",  // Pairing-friendly curve for efficient ZKPs
+
+  // Token claims
+  "scope": "https://api.example.com/submit",
+  "iat": 1234567890,
+  "exp": 1234654290,
+
+  // Nullifier - prevents double-spending without revealing identity
+  "nullifier": "H(secret, scope, epoch)",
+
+  // Rate limit commitment
+  "rate_commitment": "commit(user_id, scope, window)",
+
+  // Zero-knowledge proof
+  "zkp": {
+    "proof": "...",  // Proves: I'm unique, haven't exceeded limit
+    "public_inputs": ["scope", "nullifier", "timestamp"]
+  }
+}
+```
+
+#### Privacy Properties
+
+1. **Anonymity**: Token reveals no identity information
+2. **Unlinkability**: Different tokens cannot be linked to same user
+3. **Rate Enforcement**: Impossible to exceed limits without detection
+4. **Non-transferability**: Tokens bound to browser, can't be shared
+5. **Revocability**: Misbehaving users can be revoked without identity exposure
+
+### Session-Bound Credentials
+
+Session-bound credentials cryptographically bind credentials to a specific TLS session, preventing credential theft and ensuring credentials can't be used outside their intended context.
+
+#### Benefits Beyond Key Binding
+
+Current KB (key binding) approach uses ephemeral keys discarded after use. Session-bound credentials go further by:
+
+- Binding to TLS session via Channel ID / Token Binding
+- Ensuring credentials only work within the originating session
+- Preventing exfiltration attacks
+- Enabling long-lived sessions without credential reuse risk
+
+#### Implementation
+
+```javascript
+// Request session-bound credential
+const credential = await navigator.credentials.get({
+  identity: {
+    mode: "browser-idp",
+    format: "vc+sd-jwt",
+    fields: ["email"],
+
+    // Bind to current TLS session
+    sessionBinding: {
+      type: "tls-channel-id",
+      includeSessionId: true,
+      includeServerCert: true
+    }
+  }
+});
+
+// Credential is cryptographically bound to TLS session
+const sessionBoundToken = credential.token;
+// Format: <SD-JWT>~<disclosures>~<KB-JWT>~<session-binding>
+```
+
+#### Session Binding JWT
+
+```javascript
+// Session binding JWT (new component)
+{
+  // Header
+  "typ": "session-binding+jwt",
+  "alg": "ES256",
+
+  // Payload
+  "session_id": "tls_session_id_hash",
+  "server_cert_hash": "H(server_cert)",
+  "client_random": "...",
+  "server_random": "...",
+
+  // Binds credential to this specific TLS connection
+  "channel_id": "H(client_random || server_random || ...)",
+
+  // Optional: bind to specific IP/device fingerprint
+  "device_binding": {
+    "ip_commitment": "commit(ip_address, salt)",
+    "ua_fingerprint_hash": "H(user_agent_fingerprint)"
+  }
+}
+
+// Signature proves credential was issued within this TLS session
+```
+
+#### Attack Prevention
+
+```javascript
+// Scenario: Attacker steals session-bound credential
+
+// 1. Attacker tries to use credential in different TLS session
+async function attackerAttempt() {
+  // Even if attacker has the credential token...
+  const stolenToken = "...";
+
+  // Server verifies session binding
+  const isValid = await verifySessionBinding(stolenToken, currentTlsSession);
+  // Returns false - session_id doesn't match
+  // Credential is USELESS outside original session
+}
+
+// 2. Defender benefit: credential exfiltration is harmless
+// - Malware steals credential from memory
+// - Credential only works in victim's browser's TLS session
+// - Attacker cannot use it, even immediately
+// - No need to revoke/rotate credential
+```
+
+#### Use Cases
+
+- **High-value transactions**: Bind payment authorization to session
+- **Sensitive data access**: Healthcare records only accessible in original session
+- **Multi-step workflows**: Ensure all steps happen in same session
+- **Credential theft prevention**: Stolen credentials are useless
+- **Session fixation prevention**: Sessions cannot be hijacked with valid credentials
+
+### General Purpose Circuits (GPC)
+
+GPCs enable browsers to prove arbitrary statements about user data using zero-knowledge proofs, without revealing the underlying data.
+
+#### What are GPCs?
+
+General Purpose Circuits are programmable zero-knowledge proof systems that can prove any computable statement. Unlike specialized ZK protocols, GPCs allow:
+
+- Arbitrary logic in proof statements
+- Composable proofs
+- Privacy-preserving computations on credential data
+- Verifiable computation without revealing inputs
+
+#### Integration with Browser-as-IdP
+
+```javascript
+// Browser supports GPC-based credential proofs
+const credential = await navigator.credentials.get({
+  identity: {
+    mode: "browser-idp",
+    format: "vc+gpc",  // GPC-based credential
+
+    // Define proof circuit
+    circuit: {
+      type: "circom",  // or "noir", "halo2", etc.
+      source: "https://example.com/circuits/age-verification.circom",
+      // Or inline circuit definition
+      program: `
+        template AgeVerification() {
+          signal input birthdate;
+          signal input currentDate;
+          signal input minimumAge;
+          signal output isOldEnough;
+
+          component ageCalc = CalculateAge();
+          ageCalc.birthdate <== birthdate;
+          ageCalc.currentDate <== currentDate;
+
+          isOldEnough <== ageCalc.age >= minimumAge;
+        }
+      `
+    },
+
+    // Public inputs (revealed to verifier)
+    publicInputs: {
+      minimumAge: 21,
+      currentDate: "2025-11-04"
+    },
+
+    // Private inputs (kept secret, browser provides from user data)
+    privateInputs: {
+      birthdate: "private"  // Browser fills from user profile
+    }
+  }
+});
+
+// Verifier receives proof without learning actual birthdate
+console.log(credential.proof);
+// { isOldEnough: true, zkProof: "..." }
+// Verifier knows user is ≥21, NOT their actual age/birthdate
+```
+
+#### Advanced GPC Use Cases
+
+##### 1. Selective Disclosure with Complex Predicates
+
+```javascript
+// Prove: "I live in Europe AND I'm over 18 AND I'm a verified user"
+const complexProof = await navigator.identity.provider.generateProof({
+  circuit: "multi-predicate-verification",
+
+  publicInputs: {
+    requiredRegion: "EU",
+    minimumAge: 18,
+    requiredVerificationLevel: "government-id"
+  },
+
+  privateInputs: {
+    country: "user_country",        // Private
+    birthdate: "user_birthdate",    // Private
+    verificationType: "user_verification" // Private
+  },
+
+  // Proof output is just boolean, no data leaked
+  output: "satisfies_all_predicates"
+});
+```
+
+##### 2. Reputation Proofs
+
+```javascript
+// Prove: "My reputation score is above threshold" without revealing exact score
+const reputationProof = await navigator.credentials.get({
+  identity: {
+    mode: "browser-idp",
+    format: "vc+gpc",
+    circuit: "reputation-threshold",
+
+    publicInputs: {
+      threshold: 750,
+      category: "marketplace-seller"
+    },
+
+    privateInputs: {
+      actualScore: "user_reputation_score",
+      reviewCount: "user_review_count",
+      accountAge: "account_creation_date"
+    },
+
+    // Prove: score > threshold AND reviewCount > 10 AND accountAge > 6 months
+    predicate: "score_above_threshold_with_history"
+  }
+});
+```
+
+##### 3. Financial Qualification Proofs
+
+```javascript
+// Prove: "My income qualifies me for this service" without revealing income
+const incomeProof = await navigator.identity.provider.generateProof({
+  circuit: "income-qualification",
+
+  publicInputs: {
+    minimumIncome: 50000,
+    maximumIncome: 150000,  // Prove income is in range
+    currency: "USD"
+  },
+
+  privateInputs: {
+    actualIncome: "verified_income",
+    taxDocuments: "w2_hash",
+    employmentStatus: "employment_verification"
+  },
+
+  // Output: boolean, plus optional range proof
+  output: {
+    qualifies: true,
+    // Optional: prove income is in bucket without exact value
+    incomeBracket: "50k-100k"  // Coarse-grained disclosure
+  }
+});
+```
+
+##### 4. Social Graph Proofs
+
+```javascript
+// Prove: "I'm connected to someone you trust" without revealing who
+const socialProof = await navigator.credentials.get({
+  identity: {
+    mode: "browser-idp",
+    format: "vc+gpc",
+    circuit: "transitive-trust",
+
+    publicInputs: {
+      trustAnchor: "verifier_public_key",
+      maximumDistance: 3  // Within 3 hops
+    },
+
+    privateInputs: {
+      socialGraph: "user_social_graph",
+      connectionPath: "path_to_trust_anchor"
+    },
+
+    // Prove path exists without revealing path
+    output: "is_trusted_within_distance"
+  }
+});
+```
+
+#### Circuit Formats Supported
+
+```javascript
+// Browser supports multiple ZK circuit frameworks
+navigator.identity.provider.supportedCircuits = [
+  "circom",      // Circom (widely used, mature)
+  "noir",        // Noir (developer-friendly, Rust-like)
+  "halo2",       // Halo2 (no trusted setup, efficient)
+  "plonky2",     // Plonky2 (very fast proofs)
+  "risc0",       // RISC Zero (general computation)
+  "leo"          // Leo (Aleo's language)
+];
+
+// Extension can bundle circuits
+chrome.identity.provider.registerCircuit({
+  name: "age-verification-v1",
+  type: "circom",
+  wasmFile: "chrome-extension://abc123/circuits/age-verify.wasm",
+  zkeyFile: "chrome-extension://abc123/circuits/age-verify.zkey",
+  verificationKey: { /* ... */ }
+});
+```
+
+### Provable Object Datatype (POD)
+
+PODs are cryptographically signed data structures that enable provable statements about structured objects. Based on work from Zupass/0xPARC, PODs allow browsers to issue credentials with rich structure and provable properties.
+
+#### What are PODs?
+
+Provable Object Datatypes are signed JSON-like objects where:
+- Each field is individually signed
+- Selective disclosure of fields
+- Provable computations on fields
+- Composable with other PODs
+- Supports complex nested structures
+
+#### POD Structure
+
+```javascript
+// Browser issues POD-based credential
+const podCredential = {
+  // POD metadata
+  type: "POD",
+  version: "1.0",
+  issuer: "chrome://identity",
+
+  // Entries (name -> signed value)
+  entries: {
+    "email": {
+      type: "string",
+      value: "alice@example.com",
+      signature: "sig_1"
+    },
+    "age": {
+      type: "int",
+      value: 28,
+      signature: "sig_2"
+    },
+    "memberSince": {
+      type: "date",
+      value: "2020-01-15",
+      signature: "sig_3"
+    },
+    "verificationLevel": {
+      type: "string",
+      value: "government-id",
+      signature: "sig_4"
+    },
+    "reputation": {
+      type: "object",
+      value: {
+        "score": 892,
+        "reviewCount": 47,
+        "categories": ["seller", "buyer"]
+      },
+      signature: "sig_5"
+    }
+  },
+
+  // Merkle root of all entries for efficient verification
+  contentRoot: "merkle_root_hash",
+
+  // Issuer signature over contentRoot
+  signature: "issuer_sig"
+};
+```
+
+#### Browser POD API
+
+```javascript
+// Request POD credential from browser
+const pod = await navigator.credentials.get({
+  identity: {
+    mode: "browser-idp",
+    format: "pod",
+
+    // Request specific fields
+    fields: {
+      email: { required: true },
+      age: { required: false },
+      memberSince: { required: false },
+      "reputation.score": { required: false }  // Nested field
+    },
+
+    // Optional: request proofs about fields
+    proofs: [
+      {
+        type: "range",
+        field: "age",
+        condition: "gte",
+        value: 21
+      },
+      {
+        type: "membership",
+        field: "reputation.categories",
+        value: "verified-seller"
+      }
+    ]
+  }
+});
+
+// Browser returns POD with selective disclosure
+const disclosedPOD = {
+  type: "POD",
+  issuer: "chrome://identity",
+
+  // Only disclosed fields
+  entries: {
+    "email": {
+      type: "string",
+      value: "alice@example.com",
+      signature: "sig_1",
+      proof: "merkle_proof_1"  // Proves inclusion in contentRoot
+    }
+  },
+
+  // Proofs without revealing values
+  proofs: {
+    "age_gte_21": {
+      type: "range-proof",
+      field: "age",
+      condition: "gte",
+      threshold: 21,
+      satisfied: true,
+      zkProof: "..."  // ZK proof that age >= 21
+      // Actual age NOT revealed
+    }
+  },
+
+  contentRoot: "merkle_root_hash",  // Same root, proves integrity
+  signature: "issuer_sig"
+};
+```
+
+#### POD Use Cases
+
+##### 1. Event Tickets with Provable Properties
+
+```javascript
+// Browser stores event ticket as POD
+const ticketPOD = await navigator.identity.provider.issuePOD({
+  type: "event-ticket",
+  entries: {
+    "eventId": "concert-2025-11-04",
+    "ticketClass": "VIP",
+    "purchasePrice": 150.00,
+    "purchaseDate": "2025-10-01",
+    "ticketNumber": 12345,
+    "ownerEmail": "alice@example.com"
+  }
+});
+
+// At venue entrance: prove ownership without revealing all details
+const entranceProof = await navigator.credentials.get({
+  identity: {
+    mode: "browser-idp",
+    format: "pod",
+    podType: "event-ticket",
+
+    // Venue needs to verify
+    disclose: ["eventId", "ticketClass"],
+
+    // Prove ticket is valid without revealing price, ticket number, email
+    prove: [
+      { field: "ticketNumber", condition: "exists" },
+      { field: "purchaseDate", condition: "before", value: "2025-11-04" }
+    ]
+  }
+});
+```
+
+##### 2. Composable Credentials
+
+```javascript
+// Combine multiple PODs to prove complex statements
+const employmentPOD = { /* POD proving employment */ };
+const educationPOD = { /* POD proving degree */ };
+const residencyPOD = { /* POD proving address */ };
+
+// Create composite proof from multiple PODs
+const visaApplication = await navigator.identity.provider.composePODs({
+  pods: [employmentPOD, educationPOD, residencyPOD],
+
+  // Prove complex statement across PODs
+  statement: {
+    // From employmentPOD
+    employmentIncome: { gte: 75000 },
+    employmentDuration: { gte: "2 years" },
+
+    // From educationPOD
+    degreeLevel: { in: ["bachelor", "master", "phd"] },
+
+    // From residencyPOD
+    residencyCountry: { equals: "US" },
+    residencyDuration: { gte: "5 years" }
+  },
+
+  // Only reveal boolean result, not underlying data
+  disclose: "statement_satisfied"
+});
+```
+
+##### 3. Portable Reputation System
+
+```javascript
+// POD captures reputation across platforms
+const reputationPOD = {
+  type: "POD",
+  entries: {
+    "platform": "marketplace-x",
+    "userId": "alice123",
+    "totalSales": 247,
+    "averageRating": 4.8,
+    "responseTime": "< 2 hours",
+    "disputes": 2,
+    "resolutionRate": 1.0,
+    "memberSince": "2020-01-15",
+    "badges": ["top-seller", "quick-shipper", "great-communication"]
+  }
+};
+
+// Use on different platform with selective disclosure
+const newPlatformProof = await navigator.credentials.get({
+  identity: {
+    mode: "browser-idp",
+    format: "pod",
+
+    // New platform wants to see reputation
+    disclose: ["platform", "averageRating", "badges"],
+
+    // Prove high-quality seller without revealing exact numbers
+    prove: [
+      { field: "totalSales", condition: "gte", value: 100 },
+      { field: "disputes", condition: "lte", value: 5 },
+      { field: "resolutionRate", condition: "gte", value: 0.95 }
+    ]
+  }
+});
+```
+
+##### 4. Privacy-Preserving KYC
+
+```javascript
+// POD stores verified identity information
+const kycPOD = await navigator.identity.provider.issuePOD({
+  type: "kyc-verification",
+  entries: {
+    "fullName": "Alice Smith",
+    "dateOfBirth": "1997-03-15",
+    "nationality": "US",
+    "documentType": "passport",
+    "documentNumber": "123456789",
+    "issueDate": "2020-06-01",
+    "expiryDate": "2030-06-01",
+    "verificationDate": "2025-01-15",
+    "verificationLevel": "government-id",
+    "verifier": "chrome://identity/kyc-module",
+    "biometricHash": "hash_of_biometric_data"
+  }
+});
+
+// Financial service needs KYC but not full identity
+const serviceProof = await navigator.credentials.get({
+  identity: {
+    mode: "browser-idp",
+    format: "pod",
+    podType: "kyc-verification",
+
+    // Only reveal minimal information
+    disclose: ["nationality", "verificationLevel"],
+
+    // Prove age, document validity, no full identity
+    prove: [
+      { field: "dateOfBirth", condition: "before", value: "2004-01-01" },
+      { field: "expiryDate", condition: "after", value: "2025-11-04" },
+      { field: "verificationLevel", condition: "in", value: ["government-id", "biometric"] }
+    ]
+  }
+});
+```
+
+#### POD Operations in Browser
+
+```javascript
+// Browser POD store and operations
+class BrowserPODStore {
+  // Issue new POD
+  async issue(type, entries) {
+    const pod = await this.createPOD(entries);
+    await this.sign(pod);
+    await this.store(pod);
+    return pod;
+  }
+
+  // Derive new POD from existing (selective disclosure)
+  async derive(podId, options) {
+    const originalPOD = await this.get(podId);
+
+    return {
+      type: "POD",
+      derivedFrom: podId,
+      entries: this.selectFields(originalPOD, options.disclose),
+      proofs: await this.generateProofs(originalPOD, options.prove),
+      contentRoot: originalPOD.contentRoot,  // Preserved
+      signature: originalPOD.signature        // Preserved
+    };
+  }
+
+  // Compose multiple PODs
+  async compose(podIds, statement) {
+    const pods = await Promise.all(podIds.map(id => this.get(id)));
+    const proof = await this.proveStatement(pods, statement);
+
+    return {
+      type: "POD-composition",
+      sourceIds: podIds,
+      statement,
+      proof,
+      satisfied: proof.result
+    };
+  }
+
+  // Verify POD
+  async verify(pod) {
+    // Check issuer signature
+    const validSignature = await this.verifySignature(pod);
+
+    // Check Merkle proofs for disclosed entries
+    const validEntries = await this.verifyMerkleProofs(pod);
+
+    // Verify ZK proofs if present
+    const validProofs = await this.verifyZKProofs(pod.proofs);
+
+    return validSignature && validEntries && validProofs;
+  }
+}
+
+// Browser exposes POD store
+navigator.identity.provider.pods = new BrowserPODStore();
+```
+
+## Combining Advanced Primitives
+
+These primitives can be combined for powerful privacy-preserving use cases:
+
+### Example: Anonymous Verified Reviews
+
+```javascript
+// User wants to leave review on product they purchased
+const reviewSubmission = await navigator.credentials.get({
+  identity: {
+    mode: "browser-idp",
+
+    // Combine multiple primitives
+    credentials: [
+      {
+        // POD proves purchase
+        type: "pod",
+        podType: "purchase-receipt",
+        prove: [
+          { field: "productId", condition: "equals", value: "product-123" },
+          { field: "purchaseDate", condition: "exists" }
+        ]
+      },
+      {
+        // Anonymous token prevents spam
+        type: "anonymous-rate-limited",
+        scope: "reviews.example.com",
+        rateLimits: {
+          maxReviews: 1,  // One review per purchase
+          window: "lifetime"
+        }
+      },
+      {
+        // GPC proves reviewer reputation without identity
+        type: "gpc",
+        circuit: "reviewer-reputation",
+        publicInputs: {
+          minimumReviews: 10,
+          minimumHelpfulVotes: 50
+        },
+        privateInputs: {
+          totalReviews: "user_review_count",
+          helpfulVotes: "user_helpful_votes"
+        }
+      }
+    ],
+
+    // Session-bind to prevent credential theft
+    sessionBinding: { type: "tls-channel-id" }
+  }
+});
+
+// Result: Anonymous review that provably comes from:
+// - Real purchaser of this product
+// - Experienced reviewer
+// - Can only submit once
+// - Cannot be traced to identity
+```
+
+### Example: Privacy-Preserving Credit Check
+
+```javascript
+// Prove creditworthiness without revealing score/history
+const creditProof = await navigator.credentials.get({
+  identity: {
+    mode: "browser-idp",
+
+    credentials: [
+      {
+        // POD with credit data
+        type: "pod",
+        podType: "credit-report",
+        prove: [
+          { field: "score", condition: "gte", value: 700 },
+          { field: "delinquencies", condition: "lte", value: 0 },
+          { field: "accountAge", condition: "gte", value: "5 years" }
+        ]
+        // Actual score NOT revealed, just ≥ 700
+      },
+      {
+        // GPC proves income qualification
+        type: "gpc",
+        circuit: "debt-to-income-ratio",
+        publicInputs: {
+          maxRatio: 0.36,
+          loanAmount: 300000
+        },
+        privateInputs: {
+          monthlyIncome: "verified_income",
+          monthlyDebts: "total_monthly_debts"
+        }
+        // Proves ratio < 36%, doesn't reveal actual income
+      },
+      {
+        // Session-bound to prevent reuse
+        sessionBinding: { type: "tls-channel-id" }
+      }
+    ]
+  }
+});
+
+// Lender knows: applicant qualifies
+// Lender doesn't know: exact score, income, or debts
+```
+
+### Example: Decentralized Identity with Portable Reputation
+
+```javascript
+// Browser maintains POD-based identity across platforms
+const crossPlatformIdentity = {
+  // Core identity POD (minimal disclosure)
+  identityPOD: await navigator.identity.provider.issuePOD({
+    type: "core-identity",
+    entries: {
+      publicKey: "user_public_key",
+      created: "2020-01-15",
+      verificationType: "email+phone+biometric"
+    }
+  }),
+
+  // Reputation PODs from different platforms
+  reputationPODs: [
+    githubReputationPOD,      // Code contributions, stars, etc.
+    marketplaceReputationPOD, // Sales, ratings, etc.
+    socialReputationPOD,      // Followers, engagement, etc.
+    forumReputationPOD        // Posts, upvotes, etc.
+  ]
+};
+
+// New platform wants to verify user is legitimate
+const onboardingProof = await navigator.identity.provider.composePODs({
+  pods: crossPlatformIdentity.reputationPODs,
+
+  statement: {
+    // Prove high reputation across at least 2 platforms
+    aggregateReputation: {
+      platforms: { gte: 2 },
+      minScorePerPlatform: 4.5,
+      minActivityPerPlatform: 50
+    }
+  },
+
+  // Use GPC to prove statement without revealing which platforms
+  circuit: "aggregate-reputation",
+
+  // Use anonymous token to prevent multi-accounting
+  rateLimiting: {
+    scope: "new-platform.example.com/signup",
+    limit: { count: 1, window: "lifetime" }
+  },
+
+  // Session-bind for security
+  sessionBinding: { type: "tls-channel-id" }
+});
+
+// New platform knows: user is legitimate, has good reputation
+// New platform doesn't know: which platforms, exact scores, user's history
+```
+
 ## Ecosystem Benefits
 
 ### For Users
