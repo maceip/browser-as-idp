@@ -1,6 +1,6 @@
-# Browser Credential Signing: Authorization at the Edge
+# Browser-as-IdP: Authorization at the Edge
 
-A [Proposal](https://fedidcg.github.io/charter#proposals) of the [Federated Identity Community Group](https://fedidcg.github.io/) to enable browsers to sign authorization credentials locally—addressing the performance, security, and capability challenges of high-frequency authenticated API access.
+A [Proposal](https://fedidcg.github.io/charter#proposals) of the [Federated Identity Community Group](https://fedidcg.github.io/) to enable browsers to act as Identity Providers—signing authorization credentials locally to address the performance, security, and capability challenges of high-frequency authenticated API access.
 
 **Stage**: [Stage 1](https://github.com/w3c-fedid/Administration/blob/main/proposals-CG-WG.md#stage-1)
 **Champions**: @samuelgoto
@@ -63,10 +63,10 @@ OAuth 2.0 Security Best Current Practice explicitly warns against long-lived tok
 | Requirement | Cached OAuth Tokens | Browser Credential Signing |
 |-------------|---------------------|---------------------------|
 | **Latency** | Good (cached) | Better (<1ms local signing) |
-| **Theft resistance** | ❌ Bearer token stealable | ✅ Session-bound, device-locked |
-| **Spending limits** | ❌ API-enforced (bypassable) | ✅ Crypto-enforced |
-| **Offline capable** | ❌ Expires, needs refresh | ✅ Signs indefinitely |
-| **Selective disclosure** | ❌ Static claims | ✅ Fresh proof per request |
+| **Theft resistance** | No - Bearer token stealable | Yes - Session-bound, device-locked |
+| **Spending limits** | No - API-enforced (bypassable) | Yes - Crypto-enforced |
+| **Offline capable** | No - Expires, needs refresh | Yes - Signs indefinitely |
+| **Selective disclosure** | No - Static claims | Yes - Fresh proof per request |
 
 **Key difference**: Browser's private key never leaves device, enabling session binding impossible with portable OAuth tokens.
 
@@ -81,7 +81,38 @@ OAuth 2.0 Security Best Current Practice explicitly warns against long-lived tok
 
 ---
 
-## The Solution: Browser Credential Signing
+## The Solution: Browser-as-IdP
+
+### Architecture Overview
+
+Browser-as-IdP transforms the traditional three-party federated identity model into a two-phase delegation model where browsers become signing authorities:
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Browser
+    participant IdP as IdP (Google/etc)
+    participant RP as Relying Party
+
+    Note over User,RP: PHASE 1: Attestation (once per 30 days)
+    User->>Browser: Authenticate
+    Browser->>Browser: Generate signing key pair
+    Browser->>IdP: Request attestation + OAuth token
+    IdP->>IdP: Verify user identity
+    IdP->>Browser: Issue attestation (sign browser key)
+    Note over Browser: Cache attestation locally
+
+    Note over User,RP: PHASE 2: High-Frequency Authorization (1000s/sec)
+    loop 10,000 API calls
+        RP->>Browser: Request credential
+        Browser->>Browser: Sign credential locally (<1ms)
+        Browser->>RP: Return signed credential
+        RP->>RP: Verify IdP attestation
+        RP->>RP: Verify browser signature
+        RP->>RP: Verify session binding
+        RP->>Browser: API response
+    end
+```
 
 ### Core Concept
 
@@ -230,13 +261,43 @@ With millions of IdPs, traditional revocation doesn't scale:
 ### The Solution: Aggregation Layer
 
 **Major infrastructure providers operate revocation aggregators**:
-- Google, Cloudflare, Fastly, Facebook, Akamai
-- IdPs publish revocations to aggregators
-- RPs query aggregators (not individual IdPs)
 
+```mermaid
+graph TB
+    subgraph "1M+ Identity Providers"
+        IdP1[Enterprise IdP]
+        IdP2[Social IdP]
+        IdP3[Community IdP]
+        IdP4[Personal IdP]
+    end
+
+    subgraph "Revocation Aggregators"
+        AGG1[Google<br/>revocation.googleapis.com]
+        AGG2[Cloudflare<br/>revocation.cloudflare.com]
+        AGG3[Fastly<br/>revocation.fastly.com]
+    end
+
+    subgraph "Relying Parties"
+        RP1[API Endpoints]
+        RP2[Web Services]
+        RP3[Agent Services]
+    end
+
+    IdP1 -->|Publish<br/>revocations| AGG1
+    IdP2 -->|Publish<br/>revocations| AGG2
+    IdP3 -->|Publish<br/>revocations| AGG3
+    IdP4 -->|Publish<br/>revocations| AGG1
+
+    AGG1 -->|Check<br/>revocations<br/>cached 5min| RP1
+    AGG2 -->|Check<br/>revocations<br/>cached 5min| RP2
+    AGG3 -->|Check<br/>revocations<br/>cached 5min| RP3
+
+    style AGG1 fill:#4285f4,stroke:#333,stroke-width:2px,color:#fff
+    style AGG2 fill:#f96,stroke:#333,stroke-width:2px,color:#fff
+    style AGG3 fill:#6c5ce7,stroke:#333,stroke-width:2px,color:#fff
 ```
-1M IdPs → Publish revocations → Aggregators → 10B RPs query
-```
+
+**Architecture**: IdPs publish revocations to aggregators, RPs query aggregators (not individual IdPs)
 
 ### Why Operate an Aggregator?
 
@@ -544,10 +605,10 @@ See [PAYMENT_INTEGRATION.md](./PAYMENT_INTEGRATION.md) for payment handler integ
 Browser Credential Signing addresses a critical scalability challenge: the explosion of authenticated API calls driven by AI/ML services and, soon, autonomous agents.
 
 **By moving authorization signing to the browser**:
-- ✅ 200-300x latency reduction (sub-millisecond local signing)
-- ✅ Stronger security (session binding, device attestation)
-- ✅ New capabilities (agent payments, offline auth, selective disclosure)
-- ✅ Infrastructure opportunity (revocation aggregators)
+- 200-300x latency reduction (sub-millisecond local signing)
+- Stronger security (session binding, device attestation)
+- New capabilities (agent payments, offline auth, selective disclosure)
+- Infrastructure opportunity (revocation aggregators)
 
 **The model preserves IdP control** while enabling performance and security improvements. IdPs delegate signing authority but remain the root of trust for identity.
 
