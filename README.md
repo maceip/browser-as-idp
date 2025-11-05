@@ -2,9 +2,9 @@
 
 A [Proposal](https://fedidcg.github.io/charter#proposals) of the [Federated Identity Community Group](https://fedidcg.github.io/) to enable browsers to act as Identity Providers—signing authorization credentials locally to address the performance, security, and capability challenges of high-frequency authenticated API access.
 
-**Stage**: [Stage 1](https://github.com/w3c-fedid/Administration/blob/main/proposals-CG-WG.md#stage-1)
-**Champions**: @samuelgoto
-**Participate**: https://github.com/w3c-fedid/delegation/issues
+**Stage**: [Stage 1](https://github.com/w3c-fedid/Administration/blob/main/proposals-CG-WG.md#stage-1) <br />
+**Champions**: @www <br />
+**Participate**: https://github.com/w3c-fedid/broewser-as-idp/issues
 
 ### Why is this relevant to FedCM?
 
