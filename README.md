@@ -23,7 +23,7 @@ FedCM solved the IdP tracking problem by having browsers mediate between IdPs an
 **The impact**:
 - 200-300x latency reduction (150ms → <1ms)
 - Session-bound credentials (eliminates credential theft)
-- Agent payment authorization with cryptographic spending limits
+- Cryptographic capability enforcement (spending limits, rate limits)
 - Revocation aggregator revenue opportunity for infrastructure providers
 
 ---
@@ -74,13 +74,13 @@ OAuth 2.0 Security Best Current Practice explicitly warns against long-lived tok
 
 **Key difference**: Browser's private key never leaves device, enabling session binding impossible with portable OAuth tokens.
 
-### 3. Agent Payment Deadlock
+### 3. Agent Authorization Deadlock
 
-**Emerging requirement**: AI agents need to autonomously pay for API services (compute, data, analysis).
+**Emerging requirement**: AI agents need autonomous authorization for high-frequency service access.
 
 **Current OAuth limitations**:
-- Requires human consent per payment
-- No cryptographic spending limits (all-or-nothing access)
+- Requires human interaction for each authorization
+- No cryptographic capability limits (all-or-nothing access)
 - Agent compromise = full account access
 
 ---
@@ -204,12 +204,12 @@ async function verifyCredential(credential) {
 
 **Result**: 200x faster
 
-### 2. Agent Autonomous Payments (AP2)
+### 2. Agent Autonomous Authorization
 
-**Problem**: Agent needs to pay for API services autonomously with spending limits.
+**Problem**: Agent needs to call APIs autonomously with cryptographic capability limits.
 
 ```javascript
-// User delegates payment authority to agent
+// User delegates authorization to agent with rate limits
 const agentCred = await navigator.credentials.get({
   identity: {
     providers: [{
@@ -218,30 +218,33 @@ const agentCred = await navigator.credentials.get({
       nonce: crypto.randomUUID()
     }],
 
-    // NEW: Agent delegation with spending limits
+    // NEW: Agent delegation with cryptographic capabilities
     agentDelegation: {
       agentId: "agent://my-analyzer",
       capabilities: {
-        payment: {
-          maxAmount: "100.00",     // $100 total
-          perTransaction: "1.00"   // $1 per call
-        }
+        rateLimit: {
+          count: 1000,      // Max 1000 calls
+          window: "24h"
+        },
+        scope: ["data.read", "analysis.run"]
       }
     }
   }
 });
 
-// Agent autonomously pays for services
-await agent.callAPI("https://api.example/analyze", {
-  credential: agentCred,
-  payment: { amount: "0.10" }
-});
+// Agent autonomously calls APIs
+for (const dataset of datasets) {
+  await agent.callAPI("https://api.example/analyze", {
+    credential: agentCred,
+    data: dataset
+  });
+}
 
 // Browser enforces limits cryptographically
-// Agent CANNOT generate valid proof for amount > $1
+// Agent CANNOT exceed 1000 calls in 24h
 ```
 
-**Result**: Enable agent economy with controlled risk.
+**Result**: Enable autonomous agents with controlled risk.
 
 ### 3. Offline Authorization
 
@@ -378,7 +381,7 @@ See [ADVANCED_SCENARIOS.md](./ADVANCED_SCENARIOS.md) for revocation architecture
 ### POD (Provable Object Datatype) Format
 
 Browser credentials use [POD format](https://pod.org) for:
-- **Recursive proof composition**: Identity → Authorization → Payment → Audit
+- **Recursive proof composition**: Identity → Authorization → Service → Audit
 - **Selective disclosure**: Prove predicates without revealing claims
 - **Cryptographic integrity**: Tamper-proof structure
 
@@ -423,43 +426,41 @@ const proof = credential.generateProof({
 
 See [TECHNICAL_SPEC.md](./TECHNICAL_SPEC.md) for protocol details.
 
-### Agent Payment Protocol (AP2)
+### Recursive Proof Chains
 
-**For autonomous agent payments**:
+**For agent authorization with audit trails**:
 
 ```javascript
 // 1. Browser issues identity POD
 const identityPOD = await browserIdP.issue({ email, accountId });
 
-// 2. Agent proves spending authority
-const spendingProof = identityPOD.generateProof({
+// 2. Agent proves delegation authority
+const delegationProof = identityPOD.generateProof({
   prove: {
-    authorizedSpender: true,
-    budgetRemaining: { greaterThan: 100 }
+    authorizedAgent: true,
+    withinRateLimit: true
   },
   reveal: []  // Hide account details
 });
 
 // 3. Service verifies + issues receipt POD
 const receiptPOD = POD.create({
-  parentProof: spendingProof,  // Cryptographic chain
-  amount: 100,
+  parentProof: delegationProof,  // Cryptographic chain
+  service: "data-analysis",
   timestamp: Date.now()
 });
 
 // 4. Auditor verifies entire chain (privacy-preserving)
 const valid = receiptPOD.verifyChain();
-// Confirms: Authorized spender, sufficient budget, valid payment
-// Without revealing: Account balance, email, transaction details
+// Confirms: Authorized agent, within limits, valid service call
+// Without revealing: Account details, full access scope
 ```
 
 **What POD + recursive proofs solve**:
 1. **Agent authorization chain**: Browser → Agent → Service → Receipt → Audit
-2. **Privacy-preserving budgets**: Prove "under budget" without revealing spend history
+2. **Privacy-preserving capabilities**: Prove "within limits" without revealing usage details
 3. **Delegated authority**: Prove "authorized by X" without revealing X's credential
 4. **Compliance**: Audit trails without data retention liability
-
-See [PAYMENT_INTEGRATION.md](./PAYMENT_INTEGRATION.md) for payment handler integration.
 
 ---
 
@@ -536,8 +537,8 @@ See [PAYMENT_INTEGRATION.md](./PAYMENT_INTEGRATION.md) for payment handler integ
 
 ### Phase 5: Ecosystem Expansion (Ongoing)
 - Agent platform integration
-- Payment Handler API convergence
 - Cross-browser credential portability
+- Advanced capability models
 
 ---
 
@@ -624,7 +625,7 @@ Browser Credential Signing addresses a critical scalability challenge: the explo
 **By moving authorization signing to the browser**:
 - 200-300x latency reduction (sub-millisecond local signing)
 - Stronger security (session binding, device attestation)
-- New capabilities (agent payments, offline auth, selective disclosure)
+- New capabilities (agent delegation, offline auth, selective disclosure)
 - Infrastructure opportunity (revocation aggregators)
 
 **The model preserves IdP control** while enabling performance and security improvements. IdPs delegate signing authority but remain the root of trust for identity.
@@ -637,16 +638,21 @@ We invite the FedID community to collaborate on refining this proposal.
 
 ## Technical Specifications
 
-- [TECHNICAL_SPEC.md](./TECHNICAL_SPEC.md) - Protocol details, POD format, session binding
-- [PAYMENT_INTEGRATION.md](./PAYMENT_INTEGRATION.md) - Payment Handler API, AP2 agent payments
-- [ADVANCED_SCENARIOS.md](./ADVANCED_SCENARIOS.md) - Revocation aggregation, P2P, extensions
+### Core Protocol
+- [TECHNICAL_SPEC.md](./TECHNICAL_SPEC.md) - Protocol details, POD format, session binding, cryptographic primitives
+
+### Advanced Features
+- [ADVANCED_SCENARIOS.md](./ADVANCED_SCENARIOS.md) - Revocation aggregation, P2P authentication, offline scenarios, enterprise deployment
+
+### Payment Applications
+For payment-specific applications of Browser-as-IdP (Payment Handler API integration, autonomous agent payments with spending limits, clearing house architecture):
+- [PAYMENT_INTEGRATION.md](./PAYMENT_INTEGRATION.md) - Payment Handler API, AP2 agent payment protocol
 
 ---
 
 **Related Standards**:
 - [FedCM](https://fedidcg.github.io/FedCM/)
 - [W3C Verifiable Credentials](https://www.w3.org/TR/vc-data-model/)
-- [Payment Handler API](https://www.w3.org/TR/payment-handler/)
 - [WebAuthn](https://www.w3.org/TR/webauthn/)
 - [POD Specification](https://pod.org)
 - [OAuth 2.0 Security BCP](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-security-topics)
