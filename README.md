@@ -6,6 +6,10 @@ A [Proposal](https://fedidcg.github.io/charter#proposals) of the [Federated Iden
 **Champions**: @samuelgoto
 **Participate**: https://github.com/w3c-fedid/delegation/issues
 
+### Why is this relevant to FedCM?
+
+FedCM solved the IdP tracking problem by having browsers mediate between IdPs and RPs. Browser-as-IdP extends this model: instead of browsers merely *routing* credentials from IdPs to RPs, browsers become *signing authorities* themselves (attested by IdPs). This eliminates the performance bottleneck of IdP round-trips while preserving FedCM's privacy guarantees—IdPs can't track high-frequency API calls because browsers sign locally without contacting the IdP.
+
 ---
 
 ## Executive Summary
@@ -121,21 +125,25 @@ sequenceDiagram
 ```javascript
 // PHASE 1: DELEGATION (infrequent - once per 30 days)
 const delegation = await navigator.credentials.get({
-  fedcm: {
+  identity: {
     providers: [{
-      configURL: "https://accounts.google.com/fedcm.json",
-      requestDelegation: true  // Request signing authority
+      configURL: "chrome-extension://abcdef123456/fedcm.json",
+      clientId: "rp-client-123",
+      nonce: crypto.randomUUID(),
+
+      // NEW: Request browser signing delegation
+      requestAttestation: true
     }]
   }
 });
 
-// Google attests: "Browser key ABC can sign on behalf of user@gmail.com"
+// Extension/IdP attests: "Browser key ABC can sign on behalf of user@example.com"
 // Attestation cached locally (valid 30 days)
 
 // PHASE 2: HIGH-FREQUENCY SIGNING (thousands per second)
 for (let i = 0; i < 10000; i++) {
   const credential = await navigator.credentials.sign({
-    delegation: delegation,      // Google's attestation
+    delegation: delegation,      // IdP's attestation
     audience: "https://api.example.com",
     nonce: await rp.getNonce(),
     binding: { tlsSession: currentSession }
@@ -203,12 +211,21 @@ async function verifyCredential(credential) {
 ```javascript
 // User delegates payment authority to agent
 const agentCred = await navigator.credentials.get({
-  fedcm: {
-    providers: [{ configURL: "https://accounts.google.com/fedcm.json" }],
-    capabilities: {
-      payment: {
-        maxAmount: "100.00",     // $100 total
-        perTransaction: "1.00"   // $1 per call
+  identity: {
+    providers: [{
+      configURL: "chrome-extension://abcdef123456/fedcm.json",
+      clientId: "agent-delegator",
+      nonce: crypto.randomUUID()
+    }],
+
+    // NEW: Agent delegation with spending limits
+    agentDelegation: {
+      agentId: "agent://my-analyzer",
+      capabilities: {
+        payment: {
+          maxAmount: "100.00",     // $100 total
+          perTransaction: "1.00"   // $1 per call
+        }
       }
     }
   }
