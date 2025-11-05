@@ -2,25 +2,9 @@
 
 A [Proposal](https://fedidcg.github.io/charter#proposals) of the [Federated Identity Community Group](https://fedidcg.github.io/) to enable browsers to act as Identity Providers—signing authorization credentials locally to address the performance, security, and capability challenges of high-frequency authenticated API access.
 
-**Stage**: [Stage 1](https://github.com/w3c-fedid/Administration/blob/main/proposals-CG-WG.md#stage-1)
-**Champions**: @samuelgoto
-**Participate**: https://github.com/w3c-fedid/delegation/issues
-
----
-
-## Executive Summary
-
-**The opportunity**: Authenticated API calls are growing 96% YoY (AI/ML services). With AI agents on the horizon (100-1000x more calls per user), current OAuth/OIDC authorization architectures face critical performance bottlenecks (150-300ms per auth).
-
-**The solution**: Browsers sign authorization credentials locally (<1ms) based on IdP-issued attestations. IdPs delegate signing authority to browsers, then browsers handle high-frequency authorization without IdP round-trips.
-
-**The infrastructure opportunity**: As millions of new IdPs emerge, revocation requires an aggregation layer. Major infrastructure providers (Google, Cloudflare, Fastly, etc.) can operate revocation aggregators—becoming critical infrastructure for the credential ecosystem ($180M+/year market).
-
-**The impact**:
-- 200-300x latency reduction (150ms → <1ms)
-- Session-bound credentials (eliminates credential theft)
-- Agent payment authorization with cryptographic spending limits
-- Revocation aggregator revenue opportunity for infrastructure providers
+**Stage**: [Stage 1](https://github.com/w3c-fedid/Administration/blob/main/proposals-CG-WG.md#stage-1) <br />
+**Champions**: @www <br />
+**Participate**: https://github.com/w3c-fedid/broewser-as-idp/issues
 
 ---
 
